@@ -12,7 +12,11 @@ function Add-CSOM {
     
     if ((Test-Path $CSOMdir -pathType container) -ne $true)
     {
-        $CSOMdir = "${env:CommonProgramFiles}\Common Files\microsoft shared\Web Server Extensions\15\ISAPI"
+        $CSOMdir = "${env:CommonProgramFiles}\microsoft shared\Web Server Extensions\15\ISAPI"
+        if ((Test-Path $CSOMdir -pathType container) -ne $true)
+        {
+            Throw "Please install the SharePoint 2013[1] or SharePoint Online[2] Client Components`n `n[1] http://www.microsoft.com/en-us/download/details.aspx?id=35585`n[2] http://www.microsoft.com/en-us/download/details.aspx?id=42038`n `n "
+        }
     }
     
     

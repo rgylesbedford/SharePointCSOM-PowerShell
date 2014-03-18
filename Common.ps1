@@ -58,8 +58,7 @@ function Get-ContentType {
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
     process {
-        $contentTypes = $web.ContentTypes
-
+        $contentTypes = $web.AvailableContentTypes
         $context.Load($contentTypes)
         $context.ExecuteQuery()
 
@@ -95,27 +94,25 @@ function Add-ContentType {
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
     process {
-        $ctx = $context
+        
+        $parentCT = Get-ContentType -ContentTypeName $ParentContentType -Web $web -Context $context
+
         $contentTypes = $web.ContentTypes
-
         $ctx.Load($contentTypes)
-        $ctx.ExecuteQuery()
-
-        $parentCT = $contentTypes | Where {$_.Name -eq $ParentContentType}
-        $ctx.Load($parentCT)
         $ctx.ExecuteQuery()
 
         $contentType = $null
         if($parentCT -eq $null) {
             Write-Host "Error loading parent content type $ParentContentType"
         } else {
+
             $ctCreation = New-Object Microsoft.SharePoint.Client.ContentTypeCreationInformation
             $ctCreation.Name = $Name
             $ctCreation.Description = $Description
             $ctCreation.Group = $Group
             $ctCreation.ParentContentType = $parentCT
             $contentType = $contentTypes.Add($ctCreation)
-            $ctx.ExecuteQuery()
+            $context.ExecuteQuery()
         }
         $contentType
     }
@@ -351,7 +348,7 @@ function New-List {
         $listCreationInfo.Title = $ListName
         $listCreationInfo.TemplateType = $Type
         $listCreationInfo.Url = $Url
-        
+        $listCreationInfo.
         $list = $web.Lists.Add($listCreationInfo)
         $context.ExecuteQuery()
         $list
@@ -639,20 +636,76 @@ function Setup-Web {
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
     process {
-        foreach ($list in $xml.elements.List) {
-            $splist = Get-List -ListName $list.Title -Web $web -context $ctx
-            if($splist -eq $null) {
-                $splist = New-List -ListName $list.Title -Type $list.Type -Url $list.Url -Web $web -context $ctx
-                Write-Output "List created: $($list.Title)"
+
+        foreach ($field in $xml.elements.Fields.Field) {
+            $fieldStr = $field.OuterXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
+	        $SPfield = Get-SiteColumn -FieldId $field.ID -Web $web -context $ctx
+	        if($SPfield -eq $null) {
+		        $SPfield = Add-SiteColumn -FieldXml $fieldStr -Web $web -context $ctx
+		        Write-Output "Created Site Column $($field.Name)"
+	        } else {
+		        Write-Output "Site Column $($field.Name) already exists"
+	        }
+        }
+
+        foreach ($ContentType in $xml.elements.ContentTypes.RemoveContentType) {
+            Delete-ContentType -ContentTypeName $ContentType.Name -Web $web -context $context
+        }
+
+        foreach ($ContentType in $xml.elements.ContentTypes.ContentType) {
+            Write-Output $ContentType
+            $SPContentType = Get-ContentType -ContentTypeName $ContentType.Name -Web $web -context $ctx
+            if($SPContentType -eq $null) {
+                $SPContentType = Add-ContentType -Name $ContentType.Name -Description $ContentType.Description -Group $ContentType.Group -ParentContentType $ContentType.ParentContentType -Web $web -context $ctx
+                if($SPContentType -eq $null) {
+                    Write-Error "Could Not Create Content Type $($ContentType.Name)"
+                    break;
+                } else {
+                    Write-Output "Created Content Type $($ContentType.Name)"
+                }
+            } else  {
+                Write-Output "Content Type $($ContentType.Name)  already created."
+            }
+
+            foreach ($FieldRef in $ContentType.FieldRefs.FieldRef) {
+                $SPField = Get-FieldForContentType -FieldId $FieldRef.ID -ContentType $SPContentType -context $ctx
+                if($SPField -eq $null) {
+                    $SPFieldLink = Add-FieldToContentType -FieldId $FieldRef.ID -ContentType $SPContentType -Web $web -context $ctx
+                    Write-Output "Added field $($FieldRef.ID) to Content Type $($ContentType.Name)"
+                } else {
+                    Write-Output "Field $($FieldRef.ID) already added to Content Type $($ContentType.Name)"
+                }
+
+                $Required = $null
+                if($FieldRef.Required) {
+                    $Required = [bool]::Parse($FieldRef.Required)
+                }
+                $Hidden = $null
+                if($FieldRef.Hidden) {
+                    $Hidden = [bool]::Parse($FieldRef.Hidden)
+                }
+                Update-ContentTypeFieldLink -FieldId $FieldRef.ID -Required $Required -Hidden $Hidden -ContentType $SPContentType -context $ctx
+            }
+
+            foreach ($RemoveFieldRef in $ContentType.FieldRefs.RemoveFieldRef) {
+                Remove-FieldFromContentType -FieldId $RemoveFieldRef.ID -ContentType $SPContentType -context $ctx
+            }
+        }
+
+        foreach ($List in $xml.elements.Lists.List) {
+            $SPList = Get-List -ListName $List.Title -Web $web -context $ctx
+            if($SPList -eq $null) {
+                $SPList = New-List -ListName $List.Title -Type $List.Type -Url $List.Url -Web $web -context $ctx
+                Write-Output "List created: $($List.Title)"
             } else {
-                Write-Output "List already created: $($list.Title)"
+                Write-Output "List already created: $($List.Title)"
             }
 
             Write-Output "`tContent Types"
-	        foreach ($ct in $list.ContentType) {
-                $spContentType = Get-ListContentType -List $splist -ContentTypeName $ct.Name -context $ctx
+	        foreach ($ct in $List.ContentType) {
+                $spContentType = Get-ListContentType -List $SPList -ContentTypeName $ct.Name -context $ctx
 		        if($spContentType -eq $null) {
-                    $spContentType = Add-ListContentType -List $splist -ContentTypeName $ct.Name -Web $web -context $ctx
+                    $spContentType = Add-ListContentType -List $SPList -ContentTypeName $ct.Name -Web $web -context $ctx
                     if($spContentType -eq $null) {
                         Write-Error "`t`tContent Type could not be added: $($ct.Name)"
                     } else {
@@ -662,46 +715,21 @@ function Setup-Web {
                     Write-Output "`t`tContent Type already added: $($ct.Name)"
                 }
 	        }
-            foreach ($ct in $list.RemoveContentType) {
-                $spContentType = Get-ListContentType -List $splist -ContentTypeName $ct.Name -context $ctx
+            foreach ($ct in $List.RemoveContentType) {
+                $spContentType = Get-ListContentType -List $SPList -ContentTypeName $ct.Name -context $ctx
 		        if($spContentType -ne $null) {
-                    Delete-ListContentType -List $splist -ContentTypeName $ct.Name -context $ctx
+                    Delete-ListContentType -List $SPList -ContentTypeName $ct.Name -context $ctx
                     Write-Output "`t`tContent Type deleted: $($ct.Name)"
                 } else {
                     Write-Output "`t`tContent Type already deleted: $($ct.Name)"
                 }
             }
 
-            Write-Output "`tViews"
-            foreach ($view in $list.Views.View) {
-                $spView = Get-ListView -List $splist -ViewName $view.DisplayName -context $ctx
-                if($spView -ne $null) {
             
-                    $Paged = [bool]::Parse($view.RowLimit.Paged)
-                    $DefaultView = [bool]::Parse($view.DefaultView)
-                    $RowLimit = $view.RowLimit.InnerText
-                    $Query = $view.Query.InnerXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
-                    $ViewFields = $view.ViewFields.FieldRef | Select -ExpandProperty Name
-
-                    $spView = Update-ListView -List $splist -ViewName $view.DisplayName -Paged $Paged -Query $Query -RowLimit $RowLimit -DefaultView $DefaultView -ViewFields $ViewFields -context $ctx
-                    Write-Output "`t`tUpdated List View: $($view.DisplayName)"
-                } else {
-            
-                    $Paged = [bool]::Parse($view.RowLimit.Paged)
-                    $PersonalView = [bool]::Parse($view.PersonalView)
-                    $DefaultView = [bool]::Parse($view.DefaultView)
-                    $RowLimit = $view.RowLimit.InnerText
-                    $Query = $view.Query.InnerXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
-                    $ViewFields = $view.ViewFields.FieldRef | Select -ExpandProperty Name
-                    $ViewType = $view.Type
-                    $spView = New-ListView -List $splist -ViewName $view.DisplayName -Paged $Paged -PersonalView $PersonalView -Query $Query -RowLimit $RowLimit -DefaultView $DefaultView -ViewFields $ViewFields -ViewType $ViewType -context $ctx
-                    Write-Output "`t`tCreated List View: $($view.DisplayName)"
-                }
-            }
 
             Write-Output "`tFields"
-            foreach($field in $list.Fields.Field){
-                $spField = Get-ListField -List $splist -FieldName $Field.Name -Context $ctx
+            foreach($field in $List.Fields.Field){
+                $spField = Get-ListField -List $SPList -FieldName $Field.Name -Context $ctx
                 if($spField -eq $null) {
                     $fieldStr = $field.OuterXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
                     $spField = New-ListField -FieldXml $fieldStr -List $splist -context $ctx
@@ -710,8 +738,8 @@ function Setup-Web {
                     Write-Output "`t`tField already added: $($Field.Name)"
                 }
             }
-            foreach($Field in $list.Fields.UpdateField) {
-                $spField = Get-ListField -List $splist -FieldName $Field.Name -Context $ctx
+            foreach($Field in $List.Fields.UpdateField) {
+                $spField = Get-ListField -List $SPList -FieldName $Field.Name -Context $ctx
                 $needsUpdate = $false
                 if($Field.ValidationFormula) {
                     $ValidationFormula = $Field.ValidationFormula
@@ -739,8 +767,35 @@ function Setup-Web {
                     Write-Output "`t`tDid not need to update Field: $($Field.Name)"
                 }
             }
-            foreach($Field in $list.Fields.RemoveField) {
-                Delete-ListField -List $splist -FieldName $Field.Name -Context $ctx
+            foreach($Field in $List.Fields.RemoveField) {
+                Delete-ListField -List $SPList -FieldName $Field.Name -Context $ctx
+            }
+
+            Write-Output "`tViews"
+            foreach ($view in $List.Views.View) {
+                $spView = Get-ListView -List $SPList -ViewName $view.DisplayName -context $ctx
+                if($spView -ne $null) {
+            
+                    $Paged = [bool]::Parse($view.RowLimit.Paged)
+                    $DefaultView = [bool]::Parse($view.DefaultView)
+                    $RowLimit = $view.RowLimit.InnerText
+                    $Query = $view.Query.InnerXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
+                    $ViewFields = $view.ViewFields.FieldRef | Select -ExpandProperty Name
+
+                    $spView = Update-ListView -List $splist -ViewName $view.DisplayName -Paged $Paged -Query $Query -RowLimit $RowLimit -DefaultView $DefaultView -ViewFields $ViewFields -context $ctx
+                    Write-Output "`t`tUpdated List View: $($view.DisplayName)"
+                } else {
+            
+                    $Paged = [bool]::Parse($view.RowLimit.Paged)
+                    $PersonalView = [bool]::Parse($view.PersonalView)
+                    $DefaultView = [bool]::Parse($view.DefaultView)
+                    $RowLimit = $view.RowLimit.InnerText
+                    $Query = $view.Query.InnerXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
+                    $ViewFields = $view.ViewFields.FieldRef | Select -ExpandProperty Name
+                    $ViewType = $view.Type
+                    $spView = New-ListView -List $splist -ViewName $view.DisplayName -Paged $Paged -PersonalView $PersonalView -Query $Query -RowLimit $RowLimit -DefaultView $DefaultView -ViewFields $ViewFields -ViewType $ViewType -context $ctx
+                    Write-Output "`t`tCreated List View: $($view.DisplayName)"
+                }
             }
         }
     }

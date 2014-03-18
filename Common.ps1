@@ -7,19 +7,19 @@
 ##
 
 function Add-CSOM {
-    $CSOMdir = "${env:ProgramFiles}\Common Files\microsoft shared\Web Server Extensions\16\ISAPI"
-    $excludeDlls = "*.Portable.dll","*Microsoft.SharePoint.Client.Runtime.Windows*.dll"
+    $CSOMdir = "${env:CommonProgramFiles}\microsoft shared\Web Server Extensions\16\ISAPI"
+    $excludeDlls = "*.Portable.dll"
     
     if ((Test-Path $CSOMdir -pathType container) -ne $true)
     {
-        $CSOMdir = "${env:ProgramFiles}\Common Files\microsoft shared\Web Server Extensions\15\ISAPI"
+        $CSOMdir = "${env:CommonProgramFiles}\Common Files\microsoft shared\Web Server Extensions\15\ISAPI"
     }
     
     
     $CSOMdlls = Get-Item "$CSOMdir\*.dll" -exclude $excludeDlls
     
     ForEach ($dll in $CSOMdlls) {
-        [System.Reflection.Assembly]::LoadFrom($dll.FullName)
+        [System.Reflection.Assembly]::LoadFrom($dll.FullName) | Out-Null
     }
     $assemblies = $CSOMdlls | Select -ExpandProperty FullName
     Add-Type -ReferencedAssemblies $assemblies -TypeDefinition @"
@@ -54,6 +54,7 @@ namespace SharePointClient
     }
 }
 "@
+
 }
 
 function Get-ContentType {
@@ -596,7 +597,7 @@ function Delete-ListField{
 function Add-Web {
     param (
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web]$web,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][System.Xml]$xml,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][System.Xml.XmlElement]$xml,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
     process {
@@ -622,13 +623,13 @@ function Add-Webs {
  
     param (
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web]$web,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][System.Xml]$xml,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][System.Xml.XmlElement]$xml,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
    )
     process {
 
-        foreach ($webInfo in $xml.Webs.Web) {
-            $web = Add-Web -web $newweb -xml $webInfo -context $context 
+        foreach ($webInfo in $xml.Web) {
+            $newweb = Add-Web -web $web -xml $webInfo -context $context 
         }
       
     }
@@ -640,7 +641,7 @@ function Add-Webs {
 function Setup-Web {
     param (
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web]$web,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Xml]$xml,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][System.Xml.XmlElement]$xml,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
     process {
@@ -810,6 +811,10 @@ function Setup-Web {
                     Write-Output "`t`tCreated List View: $($view.DisplayName)"
                 }
             }
+        }
+
+        if($xml.Webs) {
+            Add-Webs -Web $web -Xml $xml.Webs -Context $ctx
         }
     }
 }

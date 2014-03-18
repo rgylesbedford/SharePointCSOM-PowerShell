@@ -1,16 +1,22 @@
-﻿# JLL Claims Auth
-# $ctx = New-Object MSDN.Samples.ClaimsAuth.ClaimClientContext.GetAuthenticatedContext($siteUrl)
-
-##
+﻿##
 #
 # Allow Powershell to use CSOM
 # http://soerennielsen.wordpress.com/2013/08/25/use-csom-from-powershell/
-#
+# SharePoint 2013 - http://www.microsoft.com/en-us/download/details.aspx?id=35585
+# SharePoint Online - http://www.microsoft.com/en-us/download/details.aspx?id=42038
 ##
-$myScriptPath = (Split-Path -Parent $MyInvocation.MyCommand.Path)
-Write-Host "Script Path $myScriptPath"
+
 function Add-CSOM {
-    $CSOMdlls = Get-Item "$myScriptPath\dlls\*.dll"
+    $CSOMdir = "${env:ProgramFiles}\Common Files\microsoft shared\Web Server Extensions\16\ISAPI"
+    $excludeDlls = "*.Portable.dll","*Microsoft.SharePoint.Client.Runtime.Windows*.dll"
+    
+    if ((Test-Path $CSOMdir -pathType container) -ne $true)
+    {
+        $CSOMdir = "${env:ProgramFiles}\Common Files\microsoft shared\Web Server Extensions\15\ISAPI"
+    }
+    
+    
+    $CSOMdlls = Get-Item "$CSOMdir\*.dll" -exclude $excludeDlls
     
     ForEach ($dll in $CSOMdlls) {
         [System.Reflection.Assembly]::LoadFrom($dll.FullName)
@@ -113,47 +119,6 @@ function Add-ContentType {
             $ctCreation.ParentContentType = $parentCT
             $contentType = $contentTypes.Add($ctCreation)
             $context.ExecuteQuery()
-        }
-        $contentType
-    }
-    end {}
-}
-
-function Add-ContentTypeRGB {
- 
-    param (
-        [parameter(ValueFromPipeline=$true)][string]$Name = "RGB Document",
-        [parameter(ValueFromPipeline=$true)][string]$Description = "Create a new $Name",
-        [parameter(ValueFromPipeline=$true)][string]$Group = "RGB Content Types",
-        [parameter(ValueFromPipeline=$true)][string]$ParentContentType = "Document",
-        [parameter(ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
-    )
-    process {
-        $siteUrl = "http://jll.spdev13.local"
-        $ctx = New-Object Microsoft.SharePoint.Client.ClientContext($siteUrl)
-        #$ctx = $context
-        $web = $ctx.Web
-        $contentTypes = $web.ContentTypes
-
-        $ctx.Load($contentTypes)
-        $ctx.ExecuteQuery()
-
-        $parentCT = $contentTypes | Where {$_.Name -eq $ParentContentType}
-        $ctx.Load($parentCT)
-        $ctx.ExecuteQuery()
-
-        $contentType = $null
-        if($parentCT -eq $null) {
-            Write-Host "Error loading parent content type $ParentContentType"
-        } else {
-            $ctCreation = New-Object Microsoft.SharePoint.Client.ContentTypeCreationInformation
-            $ctCreation.Name = $Name
-            $ctCreation.Description = $Description
-            $ctCreation.Group = $Group
-            $ctCreation.ParentContentType = $parentCT
-            $contentType = $contentTypes.Add($ctCreation)
-            #$contentType
-            #$ctx.ExecuteQuery()
         }
         $contentType
     }
@@ -300,6 +265,20 @@ function Get-SiteColumn {
     }
     end {} 
 }
+function Delete-SiteColumn {
+    param(
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$fieldId,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web] $web, 
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $field = Get-SiteColumn -FieldId $fieldId -Web $web -Context $context
+        if($field -ne $null) {
+            $field.DeleteObject()
+            $context.ExecuteQuery()
+        }
+    }
+}
 function Connect-ManagedMetadataColumn {
  
     param (
@@ -348,7 +327,6 @@ function New-List {
         $listCreationInfo.Title = $ListName
         $listCreationInfo.TemplateType = $Type
         $listCreationInfo.Url = $Url
-        $listCreationInfo.
         $list = $web.Lists.Add($listCreationInfo)
         $context.ExecuteQuery()
         $list
@@ -373,6 +351,20 @@ function Get-List {
             $context.ExecuteQuery()
         }
         $list
+    }
+}
+function Delete-List {
+    param(
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$ListName,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web] $web, 
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $list = Get-List -ListName $ListName -Web $web -Context $context
+        if($list -ne $null) {
+            $list.DeleteObject()
+            $context.ExecuteQuery()
+        }
     }
 }
 
@@ -600,6 +592,31 @@ function Delete-ListField{
     }
 }
 
+
+function Add-Web {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web]$web,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][System.Xml]$xml,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+
+        $webCreationInfo = New-Object Microsoft.SharePoint.Client.WebCreationInformation
+
+        $webCreationInfo.Url = $xml.URL
+        $webCreationInfo.Title = $xml.Title
+        $webCreationInfo.Description = $xml.Description
+        $webCreationInfo.WebTemplate = $xml.WebTemplate
+
+        $newWeb = $web.Webs.Add($webCreationInfo); 
+        $context.Load($newWeb);
+        $context.ExecuteQuery()
+
+        Setup-Web -web $newweb -xml $webInfo -context $context
+        $newWeb
+    }
+    end {} 
+}
 function Add-Webs {
 
  
@@ -610,17 +627,8 @@ function Add-Webs {
    )
     process {
 
-        foreach ($webInfo in $xml.Elements.Web) {
-             $webCreationInfo = New-Object Microsoft.SharePoint.Client.WebCreationInformation
-
-             $webCreationInfo.Url = $webInfo.URL
-             $webCreationInfo.Title = $webInfo.Title
-             $webCreationInfo.Description = $webInfo.Description
-             $webCreationInfo.WebTemplate = $webInfo.WebTemplate
-
-             $newWeb = $web.Webs.Add($webCreationInfo); 
-             $context.Load($newWeb);
-             $context.ExecuteQuery()
+        foreach ($webInfo in $xml.Webs.Web) {
+            $web = Add-Web -web $newweb -xml $webInfo -context $context 
         }
       
     }
@@ -636,23 +644,28 @@ function Setup-Web {
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
     process {
+        foreach ($List in $xml.Lists.RemoveList) {
+            Delete-List -ListName $ContentType.Title -Web $web -context $ctx
+        }
+        foreach ($ContentType in $xml.ContentTypes.RemoveContentType) {
+            Delete-ContentType -ContentTypeName $ContentType.Name -Web $web -context $context
+        }
+        foreach ($Field in $xml.Fields.RemoveField) {
+            Delete-SiteColumn -FieldId $Field.ID -Web $web -context $context
+        }
 
-        foreach ($field in $xml.elements.Fields.Field) {
-            $fieldStr = $field.OuterXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
-	        $SPfield = Get-SiteColumn -FieldId $field.ID -Web $web -context $ctx
+        foreach ($Field in $xml.Fields.Field) {
+            $fieldStr = $Field.OuterXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
+	        $SPfield = Get-SiteColumn -FieldId $Field.ID -Web $web -context $ctx
 	        if($SPfield -eq $null) {
 		        $SPfield = Add-SiteColumn -FieldXml $fieldStr -Web $web -context $ctx
-		        Write-Output "Created Site Column $($field.Name)"
+		        Write-Output "Created Site Column $($Field.Name)"
 	        } else {
-		        Write-Output "Site Column $($field.Name) already exists"
+		        Write-Output "Site Column $($Field.Name) already exists"
 	        }
         }
 
-        foreach ($ContentType in $xml.elements.ContentTypes.RemoveContentType) {
-            Delete-ContentType -ContentTypeName $ContentType.Name -Web $web -context $context
-        }
-
-        foreach ($ContentType in $xml.elements.ContentTypes.ContentType) {
+        foreach ($ContentType in $xml.ContentTypes.ContentType) {
             Write-Output $ContentType
             $SPContentType = Get-ContentType -ContentTypeName $ContentType.Name -Web $web -context $ctx
             if($SPContentType -eq $null) {
@@ -692,7 +705,7 @@ function Setup-Web {
             }
         }
 
-        foreach ($List in $xml.elements.Lists.List) {
+        foreach ($List in $xml.Lists.List) {
             $SPList = Get-List -ListName $List.Title -Web $web -context $ctx
             if($SPList -eq $null) {
                 $SPList = New-List -ListName $List.Title -Type $List.Type -Url $List.Url -Web $web -context $ctx
@@ -798,5 +811,105 @@ function Setup-Web {
                 }
             }
         }
+    }
+}
+
+
+# The taxonomy code is untested
+
+function Get-TaxonomySession {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        [Microsoft.SharePoint.Client.Taxonomy.TaxonomySession]::GetTaxonomySession($context)
+    }
+}
+function Get-TermStore {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TaxonomySession]$TaxonomySession,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $store = $TaxonomySession.GetDefaultSiteCollectionTermStore()
+        $context.Load($store)
+        $context.ExecuteQuery()
+        $store
+    }
+}
+
+function Get-TermGroup {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$GroupName,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermStore]$TermStore,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $group = $TermStore.Groups.GetByName($GroupName)
+        $context.Load($group)
+        $context.ExecuteQuery()
+        $group
+    }
+}
+function Add-TermGroup {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
+        [parameter(ValueFromPipeline=$true)][guid]$Id = [guid]::NewGuid(),
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermStore]$TermStore,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $group = $TermStore.CreateGroup($Name,$Id)
+        $TermStore.CommitAll()
+        $context.load($group)
+        $context.ExecuteQuery()
+        $group
+    }
+}
+
+function Get-TermSet {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$SetName,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermGroup]$TermGroup,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $termSet = $TermGroup.TermSets.GetByName($SetName)
+        $context.Load($termSet)
+        $context.ExecuteQuery()
+        $termSet
+    }
+}
+function Add-TermSet {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
+        [parameter(ValueFromPipeline=$true)][int]$Language = 1033,
+        [parameter(ValueFromPipeline=$true)][guid]$Id = [guid]::NewGuid(),
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermGroup]$TermGroup,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $termSet = $TermGroup.CreateTermSet($Name, $Id, $Language)
+        $TermGroup.TermStore.CommitAll()
+        $context.load($termSet)
+        $context.ExecuteQuery()
+        $termSet
+    }
+}
+function Add-Term {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
+        [parameter(ValueFromPipeline=$true)][int]$Language = 1033,
+        [parameter(ValueFromPipeline=$true)][guid]$Id = [guid]::NewGuid(),
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermSet]$TermSet,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $term = $TermSet.CreateTerm($Name, $Language, $Id)
+
+        $TermSet.TermStore.CommitAll()
+        $context.load($term)
+        $context.ExecuteQuery()
+        $term
     }
 }

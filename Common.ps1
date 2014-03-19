@@ -831,7 +831,9 @@ function Get-TaxonomySession {
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
     process {
-        [Microsoft.SharePoint.Client.Taxonomy.TaxonomySession]::GetTaxonomySession($context)
+        $session = [Microsoft.SharePoint.Client.Taxonomy.TaxonomySession]::GetTaxonomySession($context)
+        $session.UpdateCache()
+        $session
     }
 }
 function Get-TermStore {
@@ -863,7 +865,7 @@ function Get-TermGroup {
 function Add-TermGroup {
     param (
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
-        [parameter(ValueFromPipeline=$true)][guid]$Id = [guid]::NewGuid(),
+        [parameter(ValueFromPipelineByPropertyName = $true)][guid]$Id = [guid]::NewGuid(),
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermStore]$TermStore,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
@@ -892,8 +894,8 @@ function Get-TermSet {
 function Add-TermSet {
     param (
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
-        [parameter(ValueFromPipeline=$true)][int]$Language = 1033,
-        [parameter(ValueFromPipeline=$true)][guid]$Id = [guid]::NewGuid(),
+        [parameter(ValueFromPipelineByPropertyName = $true)][int]$Language = 1033,
+        [parameter(ValueFromPipelineByPropertyName = $true)][guid]$Id = [guid]::NewGuid(),
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermGroup]$TermGroup,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
@@ -907,9 +909,9 @@ function Add-TermSet {
 }
 function Add-Term {
     param (
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
-        [parameter(ValueFromPipeline=$true)][int]$Language = 1033,
-        [parameter(ValueFromPipeline=$true)][guid]$Id = [guid]::NewGuid(),
+        [parameter(Mandatory=$true, ValueFromPipeline=$true, ParameterSetName = "Name")][string]$Name,
+        [parameter(ValueFromPipelineByPropertyName = $true, ParameterSetName = "Language")][int]$Language = 1033,
+        [parameter(ValueFromPipelineByPropertyName = $true, ParameterSetName = "Id")][guid]$Id = [guid]::NewGuid(),
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermSet]$TermSet,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
@@ -917,6 +919,37 @@ function Add-Term {
         $term = $TermSet.CreateTerm($Name, $Language, $Id)
 
         $TermSet.TermStore.CommitAll()
+        $context.load($term)
+        $context.ExecuteQuery()
+        $term
+    }
+}
+function Get-Term {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][guid]$Id,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermSet]$TermSet,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $term = $TermSet.GetTerm($Id)
+        $context.Load($term)
+        $context.ExecuteQuery()
+        $term
+    }
+}
+
+function Add-ChildTerm {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
+        [parameter(ValueFromPipelineByPropertyName = $true)][int]$Language = 1033,
+        [parameter(ValueFromPipelineByPropertyName = $true)][guid]$Id = [guid]::NewGuid(),
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.Term]$parentTerm,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $term = $parentTerm.CreateTerm($Name, $Language, $Id)
+
+        $parentTerm.TermStore.CommitAll()
         $context.load($term)
         $context.ExecuteQuery()
         $term

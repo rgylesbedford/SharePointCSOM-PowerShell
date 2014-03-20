@@ -100,29 +100,26 @@ function Add-ContentType {
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
         [parameter(ValueFromPipeline=$true)][string]$Description = "Create a new $Name",
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Group,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$ParentContentType,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$ParentContentTypeName,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web] $web,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
     )
     process {
         
-        $parentCT = Get-ContentType -ContentTypeName $ParentContentType -Web $web -Context $context
-
-        $contentTypes = $web.ContentTypes
-        $ctx.Load($contentTypes)
-        $ctx.ExecuteQuery()
-
+        $parentContentType = Get-ContentType -ContentTypeName $ParentContentTypeName -Web $web -Context $context
         $contentType = $null
-        if($parentCT -eq $null) {
-            Write-Host "Error loading parent content type $ParentContentType"
+        if($parentContentType -eq $null) {
+            Write-Host "Error loading parent content type $ParentContentTypeName"
         } else {
 
-            $ctCreation = New-Object Microsoft.SharePoint.Client.ContentTypeCreationInformation
-            $ctCreation.Name = $Name
-            $ctCreation.Description = $Description
-            $ctCreation.Group = $Group
-            $ctCreation.ParentContentType = $parentCT
-            $contentType = $contentTypes.Add($ctCreation)
+            $contentTypeCreationInformation = New-Object Microsoft.SharePoint.Client.ContentTypeCreationInformation
+            $contentTypeCreationInformation.Name = $Name
+            $contentTypeCreationInformation.Description = "Create a new $Name"
+            $contentTypeCreationInformation.Group = $Group
+            $contentTypeCreationInformation.ParentContentType = $parentContentType
+            
+            $contentType = $web.ContentTypes.Add($contentTypeCreationInformation)
+            $context.load($contentType)
             $context.ExecuteQuery()
         }
         $contentType
@@ -227,9 +224,9 @@ function Update-ContentTypeFieldLink {
             if($needsUpdating) {
                 $ContentType.Update($true)
                 $context.ExecuteQuery()
-                Write-Output "Updated field link $fieldId for content type $($ContentType.Name)"
+                Write-Output "`tUpdated field link $fieldId for content type $($ContentType.Name)"
             } else {
-                Write-Output "Did not update field link $fieldId for content type $($ContentType.Name)"
+                Write-Verbose "`tDid not update field link $fieldId for content type $($ContentType.Name)"
             }
         } else {
             Write-Error "Could not find field link $fieldId for content type $($ContentType.Name)"
@@ -244,9 +241,10 @@ function Add-SiteColumn {
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$fieldXml,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web] $web,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
-   )
+    )
     process {
         $field = $web.Fields.AddFieldAsXml($fieldXml, $false, ([Microsoft.SharePoint.Client.AddFieldOptions]::AddToNoContentType))
+        $context.load($field)
         $context.ExecuteQuery()
         $field
     }
@@ -258,7 +256,7 @@ function Get-SiteColumn {
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$fieldId,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web] $web,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
-   )
+    )
     process {
         $fields = $web.Fields
         $context.Load($fields)
@@ -283,37 +281,6 @@ function Delete-SiteColumn {
             $context.ExecuteQuery()
         }
     }
-}
-function Connect-ManagedMetadataColumn {
- 
-    param (
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$fieldId,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$termStore,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$termGroup,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$termSet,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web] $web,
-        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
-   )
-    process {
-        $field = $web.Fields.GetById($fieldId)
-
-        $session =  [Microsoft.SharePoint.Client.Taxonomy.TaxonomySession]::GetTaxonomySession($context)
-        $store = $session.TermStores.GetByName($termStore)
-        $group = $store.Groups.GetByName($termGroup)
-        $set = $group.TermSets.GetByName($termSet)
-        
-        $context.Load($field)
-        $context.Load($store)
-        $context.Load($set)        
-        $context.ExecuteQuery()
-
-        $taxField = [SharePointClient.PSClientContext]::CastToTaxonomyField($context, $field)
-        $taxField.SspId = $store.Id
-        $taxField.TermSetId = $set.Id
-        $taxField.UpdateAndPushChanges($true)
-        $context.ExecuteQuery()
-    }
-    end {}
 }
 
 function New-List {
@@ -650,7 +617,7 @@ function Setup-Web {
     )
     process {
         foreach ($List in $xml.Lists.RemoveList) {
-            Delete-List -ListName $ContentType.Title -Web $web -context $ctx
+            Delete-List -ListName $List.Title -Web $web -context $context
         }
         foreach ($ContentType in $xml.ContentTypes.RemoveContentType) {
             Delete-ContentType -ContentTypeName $ContentType.Name -Web $web -context $context
@@ -661,20 +628,36 @@ function Setup-Web {
 
         foreach ($Field in $xml.Fields.Field) {
             $fieldStr = $Field.OuterXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
-	        $SPfield = Get-SiteColumn -FieldId $Field.ID -Web $web -context $ctx
+	        $SPfield = Get-SiteColumn -FieldId $Field.ID -Web $web -context $context
 	        if($SPfield -eq $null) {
-		        $SPfield = Add-SiteColumn -FieldXml $fieldStr -Web $web -context $ctx
+		        $SPfield = Add-SiteColumn -FieldXml $fieldStr -Web $web -context $context
+                if(($Field.Type -eq "TaxonomyFieldType") -or ($Field.Type -eq "TaxonomyFieldTypeMulti")) {
+                    $termSetId = $null
+                    foreach($property in $Field.Customization.ArrayOfProperty.Property) {
+                        if($property.Name -eq "TermSetId") {
+                            $termSetId = $property.Value.InnerText
+                        }
+                    }
+
+                    $taxonomySession = Get-TaxonomySession -context $context
+                    $defaultSiteCollectionTermStore = Get-DefaultSiteCollectionTermStore -TaxonomySession $taxonomySession -context $context
+                    $SPfield = [SharePointClient.PSClientContext]::CastToTaxonomyField($context, $SPfield)
+                    $SPfield.SspId = $defaultSiteCollectionTermStore.Id
+                    $SPfield.TermSetId = $termSetId
+                    $SPfield.UpdateAndPushChanges($true)
+                    $context.load($SPfield)
+                    $context.ExecuteQuery()
+                } 
 		        Write-Output "Created Site Column $($Field.Name)"
 	        } else {
-		        Write-Output "Site Column $($Field.Name) already exists"
+		        Write-Verbose "Site Column $($Field.Name) already exists"
 	        }
         }
 
         foreach ($ContentType in $xml.ContentTypes.ContentType) {
-            Write-Output $ContentType
-            $SPContentType = Get-ContentType -ContentTypeName $ContentType.Name -Web $web -context $ctx
+            $SPContentType = Get-ContentType -ContentTypeName $ContentType.Name -Web $web -context $context
             if($SPContentType -eq $null) {
-                $SPContentType = Add-ContentType -Name $ContentType.Name -Description $ContentType.Description -Group $ContentType.Group -ParentContentType $ContentType.ParentContentType -Web $web -context $ctx
+                $SPContentType = Add-ContentType -Name $ContentType.Name -Description $ContentType.Description -Group $ContentType.Group -ParentContentTypeName $ContentType.ParentContentType -Web $web -context $context
                 if($SPContentType -eq $null) {
                     Write-Error "Could Not Create Content Type $($ContentType.Name)"
                     break;
@@ -682,16 +665,16 @@ function Setup-Web {
                     Write-Output "Created Content Type $($ContentType.Name)"
                 }
             } else  {
-                Write-Output "Content Type $($ContentType.Name)  already created."
+                Write-Verbose "Content Type $($ContentType.Name)  already created."
             }
 
             foreach ($FieldRef in $ContentType.FieldRefs.FieldRef) {
-                $SPField = Get-FieldForContentType -FieldId $FieldRef.ID -ContentType $SPContentType -context $ctx
+                $SPField = Get-FieldForContentType -FieldId $FieldRef.ID -ContentType $SPContentType -context $context
                 if($SPField -eq $null) {
-                    $SPFieldLink = Add-FieldToContentType -FieldId $FieldRef.ID -ContentType $SPContentType -Web $web -context $ctx
-                    Write-Output "Added field $($FieldRef.ID) to Content Type $($ContentType.Name)"
+                    $SPFieldLink = Add-FieldToContentType -FieldId $FieldRef.ID -ContentType $SPContentType -Web $web -context $context
+                    Write-Output "`tAdded field $($FieldRef.ID) to Content Type $($ContentType.Name)"
                 } else {
-                    Write-Output "Field $($FieldRef.ID) already added to Content Type $($ContentType.Name)"
+                    Write-Verbose "`tField $($FieldRef.ID) already added to Content Type $($ContentType.Name)"
                 }
 
                 $Required = $null
@@ -702,44 +685,44 @@ function Setup-Web {
                 if($FieldRef.Hidden) {
                     $Hidden = [bool]::Parse($FieldRef.Hidden)
                 }
-                Update-ContentTypeFieldLink -FieldId $FieldRef.ID -Required $Required -Hidden $Hidden -ContentType $SPContentType -context $ctx
+                Update-ContentTypeFieldLink -FieldId $FieldRef.ID -Required $Required -Hidden $Hidden -ContentType $SPContentType -context $context
             }
 
             foreach ($RemoveFieldRef in $ContentType.FieldRefs.RemoveFieldRef) {
-                Remove-FieldFromContentType -FieldId $RemoveFieldRef.ID -ContentType $SPContentType -context $ctx
+                Remove-FieldFromContentType -FieldId $RemoveFieldRef.ID -ContentType $SPContentType -context $context
             }
         }
 
         foreach ($List in $xml.Lists.List) {
-            $SPList = Get-List -ListName $List.Title -Web $web -context $ctx
+            $SPList = Get-List -ListName $List.Title -Web $web -context $context
             if($SPList -eq $null) {
-                $SPList = New-List -ListName $List.Title -Type $List.Type -Url $List.Url -Web $web -context $ctx
+                $SPList = New-List -ListName $List.Title -Type $List.Type -Url $List.Url -Web $web -context $context
                 Write-Output "List created: $($List.Title)"
             } else {
-                Write-Output "List already created: $($List.Title)"
+                Write-Verbose "`List already created: $($List.Title)"
             }
 
             Write-Output "`tContent Types"
 	        foreach ($ct in $List.ContentType) {
-                $spContentType = Get-ListContentType -List $SPList -ContentTypeName $ct.Name -context $ctx
+                $spContentType = Get-ListContentType -List $SPList -ContentTypeName $ct.Name -context $context
 		        if($spContentType -eq $null) {
-                    $spContentType = Add-ListContentType -List $SPList -ContentTypeName $ct.Name -Web $web -context $ctx
+                    $spContentType = Add-ListContentType -List $SPList -ContentTypeName $ct.Name -Web $web -context $context
                     if($spContentType -eq $null) {
                         Write-Error "`t`tContent Type could not be added: $($ct.Name)"
                     } else {
                         Write-Output "`t`tContent Type added: $($ct.Name)"
                     }
                 } else {
-                    Write-Output "`t`tContent Type already added: $($ct.Name)"
+                    Write-Verbose "`t`tContent Type already added: $($ct.Name)"
                 }
 	        }
             foreach ($ct in $List.RemoveContentType) {
-                $spContentType = Get-ListContentType -List $SPList -ContentTypeName $ct.Name -context $ctx
+                $spContentType = Get-ListContentType -List $SPList -ContentTypeName $ct.Name -context $context
 		        if($spContentType -ne $null) {
-                    Delete-ListContentType -List $SPList -ContentTypeName $ct.Name -context $ctx
+                    Delete-ListContentType -List $SPList -ContentTypeName $ct.Name -context $context
                     Write-Output "`t`tContent Type deleted: $($ct.Name)"
                 } else {
-                    Write-Output "`t`tContent Type already deleted: $($ct.Name)"
+                    Write-Verbose "`t`tContent Type already deleted: $($ct.Name)"
                 }
             }
 
@@ -747,17 +730,17 @@ function Setup-Web {
 
             Write-Output "`tFields"
             foreach($field in $List.Fields.Field){
-                $spField = Get-ListField -List $SPList -FieldName $Field.Name -Context $ctx
+                $spField = Get-ListField -List $SPList -FieldName $Field.Name -Context $context
                 if($spField -eq $null) {
                     $fieldStr = $field.OuterXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
-                    $spField = New-ListField -FieldXml $fieldStr -List $splist -context $ctx
-                    Write-Output "`t`tCreated Field: $($Field.Name)"
+                    $spField = New-ListField -FieldXml $fieldStr -List $splist -context $context
+                    Write-Output "`t`tCreated Field: $($Field.DisplayName)"
                 } else {
-                    Write-Output "`t`tField already added: $($Field.Name)"
+                    Write-Verbose "`t`tField already added: $($Field.DisplayName)"
                 }
             }
             foreach($Field in $List.Fields.UpdateField) {
-                $spField = Get-ListField -List $SPList -FieldName $Field.Name -Context $ctx
+                $spField = Get-ListField -List $SPList -FieldName $Field.Name -Context $context
                 $needsUpdate = $false
                 if($Field.ValidationFormula) {
                     $ValidationFormula = $Field.ValidationFormula
@@ -779,19 +762,19 @@ function Setup-Web {
 
                 if($needsUpdate -eq $true) {
                     $spField.Update()
-                    $ctx.ExecuteQuery()
-                    Write-Output "`t`tUpdated Field: $($Field.Name)"
+                    $context.ExecuteQuery()
+                    Write-Output "`t`tUpdated Field: $($Field.DisplayName)"
                 } else {
-                    Write-Output "`t`tDid not need to update Field: $($Field.Name)"
+                    Write-Verbose "`t`tDid not need to update Field: $($Field.DisplayName)"
                 }
             }
             foreach($Field in $List.Fields.RemoveField) {
-                Delete-ListField -List $SPList -FieldName $Field.Name -Context $ctx
+                Delete-ListField -List $SPList -FieldName $Field.Name -Context $context
             }
 
             Write-Output "`tViews"
             foreach ($view in $List.Views.View) {
-                $spView = Get-ListView -List $SPList -ViewName $view.DisplayName -context $ctx
+                $spView = Get-ListView -List $SPList -ViewName $view.DisplayName -context $context
                 if($spView -ne $null) {
             
                     $Paged = [bool]::Parse($view.RowLimit.Paged)
@@ -800,7 +783,7 @@ function Setup-Web {
                     $Query = $view.Query.InnerXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
                     $ViewFields = $view.ViewFields.FieldRef | Select -ExpandProperty Name
 
-                    $spView = Update-ListView -List $splist -ViewName $view.DisplayName -Paged $Paged -Query $Query -RowLimit $RowLimit -DefaultView $DefaultView -ViewFields $ViewFields -context $ctx
+                    $spView = Update-ListView -List $splist -ViewName $view.DisplayName -Paged $Paged -Query $Query -RowLimit $RowLimit -DefaultView $DefaultView -ViewFields $ViewFields -context $context
                     Write-Output "`t`tUpdated List View: $($view.DisplayName)"
                 } else {
             
@@ -811,7 +794,7 @@ function Setup-Web {
                     $Query = $view.Query.InnerXml.Replace(" xmlns=`"http://schemas.microsoft.com/sharepoint/`"", "")
                     $ViewFields = $view.ViewFields.FieldRef | Select -ExpandProperty Name
                     $ViewType = $view.Type
-                    $spView = New-ListView -List $splist -ViewName $view.DisplayName -Paged $Paged -PersonalView $PersonalView -Query $Query -RowLimit $RowLimit -DefaultView $DefaultView -ViewFields $ViewFields -ViewType $ViewType -context $ctx
+                    $spView = New-ListView -List $splist -ViewName $view.DisplayName -Paged $Paged -PersonalView $PersonalView -Query $Query -RowLimit $RowLimit -DefaultView $DefaultView -ViewFields $ViewFields -ViewType $ViewType -context $context
                     Write-Output "`t`tCreated List View: $($view.DisplayName)"
                 }
             }
@@ -823,6 +806,24 @@ function Setup-Web {
     }
 }
 
+function UnSetup-Web {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Web]$web,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][System.Xml.XmlElement]$xml,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        foreach ($List in $xml.Lists.List) {
+            Delete-List -ListName $ContentType.Title -Web $web -context $context
+        }
+        foreach ($ContentType in $xml.ContentTypes.ContentType) {
+            Delete-ContentType -ContentTypeName $ContentType.Name -Web $web -context $context
+        }
+        foreach ($Field in $xml.Fields.Field) {
+            Delete-SiteColumn -FieldId $Field.ID -Web $web -context $context
+        }
+    }
+}
 
 # The taxonomy code is untested
 

@@ -836,7 +836,7 @@ function Get-TaxonomySession {
         $session
     }
 }
-function Get-TermStore {
+function Get-DefaultSiteCollectionTermStore {
     param (
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TaxonomySession]$TaxonomySession,
         [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
@@ -935,6 +935,49 @@ function Get-Term {
         $context.Load($term)
         $context.ExecuteQuery()
         $term
+    }
+}
+function Get-Terms {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermSet]$TermSet,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $terms = $TermSet.Terms
+        $context.Load($terms)
+        $context.ExecuteQuery()
+        $terms
+    }
+}
+function Get-ChildTerms {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.Term]$Term,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $terms = $Term.Terms
+        $context.Load($terms)
+        $context.ExecuteQuery()
+        $terms
+    }
+}
+
+function Get-TermsByName {
+    param (
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][string]$Name,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.Taxonomy.TermSet]$TermSet,
+        [parameter(Mandatory=$true, ValueFromPipeline=$true)][Microsoft.SharePoint.Client.ClientContext]$context
+    )
+    process {
+        $LabelMatchInformation = New-Object Microsoft.SharePoint.Client.Taxonomy.LabelMatchInformation($context);
+        $LabelMatchInformation.Lcid = 1033
+        $LabelMatchInformation.TrimUnavailable = $false         
+        $LabelMatchInformation.TermLabel = $Name
+
+        $terms = $TermSet.GetTerms($LabelMatchInformation)
+        $context.Load($terms)
+        $context.ExecuteQuery()
+        $terms
     }
 }
 
